@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>8 Ball Pool Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a1a;
+    color: #ecf0f1;
+    font-family: Arial, Helvetica, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px 10px;
+  }
+  h1 { margin-bottom: 12px; font-size: 24px; color: #f9e79f; letter-spacing: 1px; }
+  #wrap { width: 100%; max-width: 660px; }
+  canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: #333333;
+    border-radius: 6px;
+    cursor: crosshair;
+    touch-action: none;
+  }
+  p.hint { margin-top: 10px; font-size: 14px; color: #aaaaaa; text-align: center; }
+</style>
+</head>
+<body>
+<h1>8 Ball Pool</h1>
+<div id="wrap"><canvas id="game" width="660" height="400"></canvas></div>
+<p class="hint">Move the mouse to aim &mdash; click to shoot &nbsp;&bull;&nbsp; R = new game</p>
+<script>
+"use strict";
+/* ---------------------------------------------------------------------------
+ * 8 Ball Pool — web port (HTML5 Canvas + vanilla JavaScript)
+ * Faithful port of 8BallPool.py (Python/pygame): same table size, colors,
+ * physics, aiming, formation and rules. The only intentional rule change:
+ * pocketing the 8-ball as the last ball now wins ("You Won!") — in the
+ * original that message was unreachable.
+ * ------------------------------------------------------------------------- */
+
+// ---- Constants (same values as 8BallPool.py) ----
+var WIDTH = 660, HEIGHT = 360, OUTER_HEIGHT = 400, MARGIN = 30;
+var RADIUS = 10, FRICTION = 0.005, STICK_LEN = 100;
+
+var C = {
+  background: "#333333", // (51, 51, 51)
+  white:      "#ECF0F1", // (236, 240, 241)
+  gray:       "#7B7D7D", // (123, 125, 125)
+  black:      "#17202A", // (23, 32, 42)
+  yellow:     "#F4D03F", // (244, 208, 63)
+  blue:       "#3498DB", // (52, 152, 219)
+  red:        "#CB4335", // (203, 67, 53)
+  purple:     "#884EA0", // (136, 78, 160)
+  orange:     "#E67E22", // (230, 126, 34)
+  green:      "#28B463", // (40, 180, 99)
+  brown:      "#641E16", // (100, 30, 22)
+  stick:      "#F9E79F", // (249, 231, 159)
+  winBlue:    "#85C1E9", // (133, 193, 233)
+  loseRed:    "#F1948A"  // (241, 148, 138)
+};
+var COLORS = [C.yellow, C.blue, C.red, C.purple, C.orange, C.green, C.brown,
+              C.black,
+              C.yellow, C.blue, C.red, C.purple, C.orange, C.green, C.brown];
+
+function rad(d) { return d * Math.PI / 180; }
+function deg(r) { return r * 180 / Math.PI; }
+
+// ---- Ball (mirrors class Ball) ----
+function Ball(x, y, speed, color, angle, ballNum) {
+  this.x = x + RADIUS;
+  this.y = y + RADIUS;
+  this.color = color;
+  this.angle = angle; // degrees, like the original
+  this.speed = speed;
+  this.ballNum = ballNum;
+}
+Ball.prototype.draw = function (ctx, x, y) {
+  if (x === undefined) x = this.x;
+  if (y === undefined) y = this.y;
+  ctx.fillStyle = this.color;
+  ctx.beginPath();
+  ctx.arc(x, y, RADIUS, 0, Math.PI * 2);
+  ctx.fill();
+  // number: white on black/cue ball, black otherwise (like the original)
+  ctx.fillStyle = (this.color === C.black || this.ballNum === "cue") ? C.white : C.black;
+  ctx.font = "10px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(this.ballNum), x, y + 0.5);
+};
+Ball.prototype.move = function () {
+  this.speed -= FRICTION;
+  if (this.speed <= 0) this.speed = 0;
+  this.x += this.speed * Math.cos(rad(this.angle));
+  this.y += this.speed * Math.sin(rad(this.angle));
+  // wall bounces — same conditions as the original (kept verbatim in form)
+  if (!(this.x < WIDTH - RADIUS - MARGIN)) {
+    this.x = WIDTH - RADIUS - MARGIN;
+    this.angle = 180 - this.angle;
+  }
+  if (!(RADIUS + MARGIN < this.x)) {
+    this.x = RADIUS + MARGIN;
+    this.angle = 180 - this.angle;
+  }
+  if (!(this.y < HEIGHT - RADIUS - MARGIN)) {
+    this.y = HEIGHT - RADIUS - MARGIN;
+    this.angle = 360 - this.angle;
+  }
+  if (!(RADIUS + MARGIN < this.y)) {
+    this.y = RADIUS + MARGIN;
+    this.angle = 360 - this.angle;
+  }
+};
+
+// ---- Pocket (mirrors class Pockets) ----
+function Pocket(x, y) {
+  this.r = MARGIN / 2;
+  this.x = x + this.r + 10;
+  this.y = y + this.r + 10;
+}
+Pocket.prototype.draw = function (ctx) {
+  ctx.fillStyle = C.black;
+  ctx.beginPath();
+  ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+  ctx.fill();
+};
+function makePockets() {
+  var r = MARGIN / 2;
+  return [
+    new Pocket(0, 0),
+    new Pocket(WIDTH / 2 - r * 2, 0),
+    new Pocket(WIDTH - r - MARGIN - 5, 0),
+    new Pocket(0, HEIGHT - MARGIN - 5 - r),
+    new Pocket(WIDTH / 2 - r * 2, HEIGHT - MARGIN - 5 - r),
+    new Pocket(WIDTH - r - MARGIN - 5, HEIGHT - MARGIN - 5 - r)
+  ];
+}
+
+// ---- Collision (mirrors collision() / checkCollision() / checkCueCollision()) ----
+function collision(b1, b2) {
+  return Math.hypot(b1.x - b2.x, b1.y - b2.y) <= RADIUS * 2;
+}
+// Exact port of the original ball-vs-ball response formulas.
+function resolveCollision(b1, b2) {
+  if (b1.x === b2.x) return; // original computed an unused angleIncline here
+  var u1 = b1.speed, u2 = b2.speed;
+  b1.speed = Math.sqrt(Math.pow(u1 * Math.cos(rad(b1.angle)), 2) +
+                       Math.pow(u2 * Math.sin(rad(b2.angle)), 2));
+  b2.speed = Math.sqrt(Math.pow(u2 * Math.cos(rad(b2.angle)), 2) +
+                       Math.pow(u1 * Math.sin(rad(b1.angle)), 2));
+  var tangent = deg(Math.atan((b1.y - b2.y) / (b1.x - b2.x))) + 90;
+  var angle = tangent + 90;
+  b1.angle = 2 * tangent - b1.angle;
+  b2.angle = 2 * tangent - b2.angle;
+  b1.x += b1.speed * Math.sin(rad(angle));
+  b1.y -= b1.speed * Math.cos(rad(angle));
+  b2.x -= b2.speed * Math.sin(rad(angle));
+  b2.y += b2.speed * Math.cos(rad(angle));
+}
+
+// ---- Game state ----
+var balls = [];
+var pockets = [];
+var cueBall = null;
+var mouse = { x: 0, y: 0 };
+var gameOver = null; // null | { win: true/false }
+
+// Starting triangle — same expressions as reset() in the original.
+function reset() {
+  balls = [];
+  var s = 70, h = HEIGHT / 2;
+  balls.push(new Ball(s,             h - 4 * RADIUS, 0, COLORS[0],  0, 1));
+  balls.push(new Ball(s + 2 * RADIUS, h - 3 * RADIUS, 0, COLORS[1],  0, 2));
+  balls.push(new Ball(s,             h - 2 * RADIUS, 0, COLORS[2],  0, 3));
+  balls.push(new Ball(s + 4 * RADIUS, h - 2 * RADIUS, 0, COLORS[3],  0, 4));
+  balls.push(new Ball(s + 2 * RADIUS, h - RADIUS,     0, COLORS[4],  0, 5));
+  balls.push(new Ball(s,             h,              0, COLORS[5],  0, 6));
+  balls.push(new Ball(s + 6 * RADIUS, h - RADIUS,     0, COLORS[6],  0, 7));
+  balls.push(new Ball(s + 4 * RADIUS, h,              0, COLORS[7],  0, 8));
+  balls.push(new Ball(s + 8 * RADIUS, h,              0, COLORS[8],  0, 9));
+  balls.push(new Ball(s + 6 * RADIUS, h + RADIUS,     0, COLORS[9],  0, 10));
+  balls.push(new Ball(s + 2 * RADIUS, h + RADIUS,     0, COLORS[10], 0, 11));
+  balls.push(new Ball(s,             h + 2 * RADIUS, 0, COLORS[11], 0, 12));
+  balls.push(new Ball(s + 4 * RADIUS, h + 2 * RADIUS, 0, COLORS[12], 0, 13));
+  balls.push(new Ball(s + 2 * RADIUS, h + 3 * RADIUS, 0, COLORS[13], 0, 14));
+  balls.push(new Ball(s,             h + 4 * RADIUS, 0, COLORS[14], 0, 15));
+  cueBall = new Ball(WIDTH / 2, HEIGHT / 2, 0, C.white, 0, "cue");
+  pockets = makePockets();
+  gameOver = null;
+}
+
+function endGame(win) {
+  gameOver = { win: win };
+}
+
+// ---- Physics step (one frame at 60 fps, like clock.tick(60)) ----
+function step() {
+  if (gameOver) return;
+  cueBall.move();
+  for (var i = 0; i < balls.length; i++) balls[i].move();
+
+  // ball vs ball (original loops j from the end down to i+1)
+  for (var a = 0; a < balls.length; a++) {
+    for (var b = balls.length - 1; b > a; b--) {
+      if (collision(balls[a], balls[b])) resolveCollision(balls[a], balls[b]);
+    }
+  }
+  // cue ball vs balls (same formulas as ball-vs-ball)
+  for (var k = 0; k < balls.length; k++) {
+    if (collision(balls[k], cueBall)) resolveCollision(balls[k], cueBall);
+  }
+
+  // pockets: ball is pocketed when dist < pocket.r + RADIUS
+  for (var p = 0; p < pockets.length; p++) {
+    var snapshot = balls.slice();
+    for (var sIdx = 0; sIdx < snapshot.length; sIdx++) {
+      var bl = snapshot[sIdx];
+      if (Math.hypot(pockets[p].x - bl.x, pockets[p].y - bl.y) < pockets[p].r + RADIUS) {
+        var at = balls.indexOf(bl);
+        if (at !== -1) {
+          balls.splice(at, 1);
+          if (bl.ballNum === 8) {
+            // FIX vs the original: winning is now possible — the 8-ball as
+            // the last remaining ball means "You Won!".
+            endGame(balls.length === 0);
+            return;
+          }
+        }
+      }
+    }
+  }
+}
+
+// ---- Rendering ----
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+
+function drawStick() {
+  var t = deg(Math.atan2(cueBall.y - mouse.y, cueBall.x - mouse.x));
+  // white aim line: from the cue ball, 100px away from the mouse
+  ctx.strokeStyle = C.white;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cueBall.x + STICK_LEN * Math.cos(rad(t)),
+             cueBall.y + STICK_LEN * Math.sin(rad(t)));
+  ctx.lineTo(cueBall.x, cueBall.y);
+  ctx.stroke();
+  // the stick itself: from the mouse to the cue ball
+  ctx.strokeStyle = C.stick;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(mouse.x, mouse.y);
+  ctx.lineTo(cueBall.x, cueBall.y);
+  ctx.stroke();
+}
+
+function score() {
+  ctx.fillStyle = C.background;
+  ctx.fillRect(0, HEIGHT, WIDTH, OUTER_HEIGHT - HEIGHT);
+  for (var i = 0; i < balls.length; i++) {
+    balls[i].draw(ctx, (i + 1) * 2 * (RADIUS + 1), HEIGHT + RADIUS + 10);
+  }
+  ctx.fillStyle = C.stick;
+  ctx.font = '30px "Agency FB", Arial, sans-serif';
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("Remaining Balls: " + balls.length, WIDTH / 2 + 50, HEIGHT + RADIUS / 2);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(0, 0, WIDTH, OUTER_HEIGHT);
+  ctx.font = '75px "Agency FB", Arial, sans-serif';
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = gameOver.win ? C.winBlue : C.loseRed;
+  ctx.fillText(gameOver.win ? "You Won!" : "You Lost! Black in Hole!", 50, HEIGHT / 2);
+  ctx.font = "24px Arial, sans-serif";
+  ctx.fillStyle = C.white;
+  ctx.fillText("Press R to play again", 50, HEIGHT / 2 + 95);
+}
+
+function render() {
+  ctx.fillStyle = C.background;
+  ctx.fillRect(0, 0, WIDTH, OUTER_HEIGHT);
+  cueBall.draw(ctx);
+  // the stick is only shown while the cue ball is stopped (like the original)
+  if (!gameOver && cueBall.speed === 0) drawStick();
+  for (var i = 0; i < balls.length; i++) balls[i].draw(ctx);
+  // border
+  ctx.fillStyle = C.gray;
+  ctx.fillRect(0, 0, WIDTH, 30);
+  ctx.fillRect(0, 0, 30, HEIGHT);
+  ctx.fillRect(WIDTH - 30, 0, 30, HEIGHT);
+  ctx.fillRect(0, HEIGHT - 30, WIDTH, 30);
+  // pockets
+  for (var p = 0; p < pockets.length; p++) pockets[p].draw(ctx);
+  score();
+  if (gameOver) drawGameOver();
+}
+
+// ---- Input ----
+function canvasPos(clientX, clientY) {
+  var r = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - r.left) * (WIDTH / r.width),
+    y: (clientY - r.top) * (OUTER_HEIGHT / r.height)
+  };
+}
+function aim(clientX, clientY) {
+  var pos = canvasPos(clientX, clientY);
+  mouse.x = pos.x;
+  mouse.y = pos.y;
+}
+function shoot(clientX, clientY) {
+  if (gameOver) return;
+  aim(clientX, clientY);
+  var dist = Math.hypot(cueBall.x - mouse.x, cueBall.y - mouse.y);
+  var force = dist / 10;
+  if (force > 10) force = 10;
+  cueBall.angle = deg(Math.atan2(cueBall.y - mouse.y, cueBall.x - mouse.x));
+  cueBall.speed = force;
+}
+canvas.addEventListener("mousemove", function (e) { aim(e.clientX, e.clientY); });
+canvas.addEventListener("mousedown", function (e) { shoot(e.clientX, e.clientY); });
+canvas.addEventListener("touchstart", function (e) {
+  e.preventDefault();
+  var t = e.changedTouches[0];
+  shoot(t.clientX, t.clientY);
+}, { passive: false });
+canvas.addEventListener("touchmove", function (e) {
+  e.preventDefault();
+  var t = e.changedTouches[0];
+  aim(t.clientX, t.clientY);
+}, { passive: false });
+window.addEventListener("keydown", function (e) {
+  if (e.key === "r" || e.key === "R") reset();
+});
+
+// ---- Main loop: fixed 60 fps steps, like clock.tick(60) ----
+function frame() {
+  step();
+  render();
+}
+reset();
+setInterval(frame, 1000 / 60);
+</script>
+</body>
+</html>
