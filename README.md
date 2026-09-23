@@ -1,5 +1,7 @@
 # 8 Ball Pool Game
 
+Created by **Erion Nezha**
+
 Play it live: https://erionnezha.github.io/8-Ball-Pool-Game/
 
 A classic 8-ball pool table game. Aim with the mouse, click to shoot, and pocket all 15 balls — but don't sink the black 8-ball too early!
